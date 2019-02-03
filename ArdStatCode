@@ -1,0 +1,205 @@
+#include <DHT.h>
+#include <LiquidCrystal_I2C.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <SD.h>
+#include <Time.h>
+#include <TimeLib.h>
+#include <DS1307RTC.h>
+#define ECHO_TO_SERIAL 1 //Sends datalogging to serial if 1, nothing if 0
+#define LOG_INTERVAL 360000 //milliseconds between entries (6 minutes = 360000)
+
+//Define integers
+int soilMoistureValue = 0; 
+int soilMoistureValuePercent = 0;
+
+const int chipSelect = 10;
+RTC_DS1307 rtc;
+
+// Define LCD pinout
+const int  en = 2, rw = 1, rs = 0, d4 = 4, d5 = 5, d6 = 6, d7 = 7, bl = 3;
+
+// Define I2C Address - change if reqiuired
+const int i2c_addr = 0x27;
+
+// DHT-22
+#define DHTPIN 7       // DHT-22 Output Pin connection
+#define DHTTYPE DHT22   // DHT Type is DHT 22 (AM2302)
+
+// Define LCD display connections
+LiquidCrystal_I2C lcd(i2c_addr, en, rw, rs, d4, d5, d6, d7, bl, POSITIVE);
+
+// Define Variables
+float hum;    // Stores humidity value in percent
+float temp;   // Stores temperature value in Celcius
+
+// Setup DHT sensor for normal 16mhz Arduino
+DHT dht(DHTPIN, DHTTYPE);
+
+DateTime now;
+File logfile;
+
+void error(char *str)
+{
+  Serial.print("error: ");
+  Serial.println(str);
+    
+  while(1);
+}
+
+delay(1000);
+void setup() {
+   Serial.begin(9600);
+   Serial.println("Initializing SD card...");
+   lcd.begin(20,4); //Initialize LCD
+  delay(3000);
+  
+  pinMode(chipSelect, OUTPUT); //Pin for writing to SD card
+  analogReference(EXTERNAL);
+  
+  dht.begin();     //Initialize DHT sensor
+
+
+ //Establish connection with real time clock
+  Wire.begin();
+  if (!rtc.begin()) {
+    logfile.println("RTC failed");
+#if ECHO_TO_SERIAL
+    Serial.println("RTC failed");
+#endif  //ECHO_TO_SERIAL
+  }
+  
+  //Set the time and date on the real time clock if necessary
+ if (! rtc.isrunning()) {
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  
+  //Check if SD card is present and can be initialized
+  if (!SD.begin(chipSelect)) {
+    error("Card failed, or not present");        
+  }
+  
+  Serial.println("Card initialized.");
+  
+  // create a new file
+  char filename[] = "LOGGER00.CSV";
+  for (uint8_t i = 0; i < 100; i++) {
+    filename[6] = i/10 + '0';
+    filename[7] = i%10 + '0';
+    if (! SD.exists(filename)) {
+      // only open a new file if it doesn't exist
+      logfile = SD.open(filename, FILE_WRITE); 
+      break;  // leave the loop!
+    }
+  }
+  
+  if (! logfile) {
+    error("couldnt create file");
+  }
+  
+  Serial.print("Logging to: ");
+  Serial.println(filename);
+  
+  
+  logfile.println("Unix Time (s),Date,Air Temp (F),Soil Moisture Content (%),Relative Humidity (%)");   //HEADER 
+#if ECHO_TO_SERIAL
+  Serial.println("Unix Time (s),Date,,Air Temp (F),Soil Moisture Content (%),Relative Humidity (%)");
+#endif ECHO_TO_SERIAL// attempt to write out the header to the file
+
+  now = rtc.now();
+    
+}
+
+void loop(){
+  delay((LOG_INTERVAL -1) - (millis() % LOG_INTERVAL));
+
+   now = rtc.now();
+  
+  // log time
+  logfile.print(now.unixtime()); // seconds since 2000
+  logfile.print(",");
+  logfile.print(now.year(), DEC);
+  logfile.print("/");
+  logfile.print(now.month(), DEC);
+  logfile.print("/");
+  logfile.print(now.day(), DEC);
+  logfile.print(" ");
+  logfile.print(now.hour(), DEC);
+  logfile.print(":");
+  logfile.print(now.minute(), DEC);
+  logfile.print(":");
+  logfile.print(now.second(), DEC);
+  logfile.print(",");
+ #if ECHO_TO_SERIAL
+  Serial.print(now.unixtime()); // seconds since 2000
+  Serial.print(",");
+  Serial.print(now.year(), DEC);
+  Serial.print("/");
+  Serial.print(now.month(), DEC);
+  Serial.print("/");
+  Serial.print(now.day(), DEC);
+  Serial.print(" ");
+  Serial.print(now.hour(), DEC);
+  Serial.print(":");
+  Serial.print(now.minute(), DEC);
+  Serial.print(":");
+  Serial.print(now.second(), DEC);
+  Serial.print(",");
+#endif //ECHO_TO_SERIAL
+    
+    soilMoistureValue = analogRead(A0); //read raw soil moisture value
+    soilMoistureValuePercent = map(soilMoistureValue, 590, 170, 0, 100); //convert raw value in percent
+      
+    hum = dht.readHumidity();// Get Humidity value
+    delay(20);
+    temp= dht.readTemperature();  // Get Temperature value
+    delay(20);
+    // Clear the display
+    lcd.clear();
+    
+    // Print temperature on top line
+    lcd.setCursor(0,0);
+  lcd.print("Temp Aer:   ");
+  lcd.print(temp);
+  lcd.print(" C");
+  
+  // Print humidity on second line
+  lcd.setCursor(0,1);
+  lcd.print("Umidit Aer: ");
+  lcd.print(hum);
+  lcd.print(" %");
+
+  //Print Soil Hum on third line
+  lcd.setCursor(0, 2);  
+  lcd.print("Umidit Sol: ");
+  lcd.print(soilMoistureValuePercent);
+  lcd.print("    %");
+
+ //Log variables
+  logfile.print(temp);
+  logfile.print(",");
+  logfile.print(soilMoistureValuePercent);
+  logfile.print(",");
+  logfile.print(hum);
+  logfile.print(",");
+#if ECHO_TO_SERIAL
+  Serial.print(temp);
+  Serial.print(",");
+  Serial.print(soilMoistureValuePercent);
+  Serial.print(",");
+  Serial.print(hum);
+  Serial.print(",");
+#endif
+   
+ logfile.println();
+#if ECHO_TO_SERIAL
+  Serial.println();
+#endif
+  delay(50);
+  
+  //Write to SD card
+  logfile.flush();
+  delay(5000);
+}
